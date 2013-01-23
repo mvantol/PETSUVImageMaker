@@ -1,0 +1,6 @@
+This code is almost entirely from 3D Slicer 4, an existing open source project: http://www.slicer.org/
+
+This in particular is a minor edit of an existing module:
+http://www.slicer.org/slicerWiki/index.php/Documentation/Nightly/Modules/PETStandardUptakeValueComputation
+
+I cannot guarantee that this code works correctly as is.
