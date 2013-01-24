@@ -25,10 +25,7 @@ endif()
 
 #-----------------------------------------------------------------------------
 set(MODULE_INCLUDE_DIRECTORIES
-  ${vtkITK_INCLUDE_DIRS}
-  ${MRMLCore_INCLUDE_DIRS}
-  ${SlicerBaseLogic_SOURCE_DIR}
-  ${SlicerBaseLogic_BINARY_DIR}
+  ${Slicer_Libs_INCLUDE_DIRS}
   )
 
 set(MODULE_SRCS
@@ -36,12 +33,8 @@ set(MODULE_SRCS
 
 set(MODULE_TARGET_LIBRARIES
   ${ITK_LIBRARIES}
+  ${VTK_LIBRARIES}
   vtkITK
-  ModuleDescriptionParser
-  MRMLCore
-  SlicerBaseLogic
-  SlicerBaseCLI
-  ITKIO
   )
 
 #-----------------------------------------------------------------------------
