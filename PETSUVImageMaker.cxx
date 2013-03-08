@@ -24,16 +24,21 @@
 #include <itkImageSeriesReader.h>
 #include <itkMetaDataDictionary.h>
 #include <itkNumericSeriesFileNames.h>
-#include <itkOrientedImage.h>
+#include <itkImage.h>
+#include <itkImageFileReader.h>
+#include <itkNrrdImageIO.h>
 
 // GDCM includes
-#include <gdcmBinEntry.h>
+/*#include <gdcmBinEntry.h>
 #include <gdcmFile.h>
 #include <gdcmGlobal.h>
 #include <gdcmSeqEntry.h>
 #include <gdcmSQItem.h>
 #include <gdcmUtil.h>
-#include <gdcmValEntry.h>
+#include <gdcmValEntry.h>*/
+
+#undef HAVE_SSTREAM // allegedly stupid DCMTK Header issue; I've not dealt with it personally
+#include "itkDCMTKFileReader.h"
 
 // ...
 // ...............................................................................................
@@ -111,6 +116,7 @@ struct parameters
     std::string decayFactor;
     std::string radionuclideHalfLife;
     std::string frameReferenceTime;
+
 };
 
 // ...
@@ -778,8 +784,8 @@ int LoadImagesAndComputeSUV( parameters & list, T )
   typedef itk::ImageFileReader<LabelImageType>  LabelReaderType;
   typedef itk::ImageFileWriter<OutputImageType> WriterType;
 
-  vtkImageData *                    petVolume;
-  vtkITKArchetypeImageSeriesReader *reader1 = NULL;
+  //vtkImageData *                    petVolume;
+  //vtkITKArchetypeImageSeriesReader *reader1 = NULL;
   // check for the input files
   FILE * petfile;
   petfile = fopen(list.PETVolumeName.c_str(), "r");
@@ -798,19 +804,19 @@ int LoadImagesAndComputeSUV( parameters & list, T )
     std::cerr << "ERROR: no output volume" << endl;// '" << list.SUVVolumeName.c_str() << "'" << endl;
     return EXIT_FAILURE;
     }
+  //else
+  //  std::cout << "Name '" << list.SUVVolumeName.c_str() << "' exists" << endl;
   //fclose(suvfile);
 
-
   // Read the PET file
-
-  reader1 = vtkITKArchetypeImageSeriesScalarReader::New();
+  //reader1 = vtkITKArchetypeImageSeriesScalarReader::New();
 //    vtkPluginFilterWatcher watchReader1 ( reader1, "Reading PET Volume", CLPProcessInformation );
-  reader1->SetArchetype(list.PETVolumeName.c_str() );
-  reader1->SetOutputScalarTypeToNative();
-  reader1->SetDesiredCoordinateOrientationToNative();
-  reader1->SetUseNativeOriginOn();
-  reader1->Update();
-  std::cout << "Done reading the file " << list.PETVolumeName.c_str() << endl;
+  //reader1->SetArchetype(list.PETVolumeName.c_str() );
+  //reader1->SetOutputScalarTypeToNative();
+  //reader1->SetDesiredCoordinateOrientationToNative();
+  //reader1->SetUseNativeOriginOn();
+  //reader1->Update();
+  //std::cout << "Done reading the file " << list.PETVolumeName.c_str() << endl;
 
   // Read the SUV file
 
@@ -827,26 +833,26 @@ int LoadImagesAndComputeSUV( parameters & list, T )
   // stuff the images.
 //  reader1->Update();
 //  reader2->Update();
-  petVolume = reader1->GetOutput();
-  petVolume->Update();
+  //petVolume = reader1->GetOutput();
+  //petVolume->Update();
 
   //
   // COMPUTE SUV ///////////////////////////////////////////////////////////////////////////////RSNA CHANGE//////////////////////////
   //
 
-  if( petVolume == NULL )
+  /*if( petVolume == NULL )
     {
     std::cerr << "No input PET volume found." << std::endl;
     return EXIT_FAILURE;
-    }
+    }*/
 
 
   // read the DICOM dir to get the radiological data
 
   typedef short PixelValueType;
-  typedef itk::OrientedImage< PixelValueType, 3 > VolumeType;
+  typedef itk::Image< PixelValueType, 3 > VolumeType;
   typedef itk::ImageSeriesReader< VolumeType > VolumeReaderType;
-  typedef itk::OrientedImage< PixelValueType, 2 > SliceType;
+  typedef itk::Image< PixelValueType, 2 > SliceType;
   typedef itk::ImageFileReader< SliceType > SliceReaderType;
   typedef itk::GDCMImageIO ImageIOType;
   typedef itk::GDCMSeriesFileNames InputNamesGeneratorType;
@@ -909,374 +915,49 @@ int LoadImagesAndComputeSUV( parameters & list, T )
     0018,1076  Radionuclide Positron Fraction: 0
 */
     int parsingDICOM = 0;
-    gdcm::File *f = new gdcm::File();
-    if ( f != NULL )
+    itk::DCMTKFileReader fileReader;
+    fileReader.SetFileName(filenames[0]);
+    fileReader.LoadFile();
+
+    itk::DCMTKSequence seq;
+    if(fileReader.GetElementSQ(0x0054,0x0016,seq,false) == EXIT_SUCCESS)
       {
-      const char *fn = filenames[0].c_str();
-      f->SetFileName( fn );
-      //bool res = f->Load();   // FIXME: commented out for now to avoid compile warnings
-      f->Load();   // FIXME: handle res
-
-      gdcm::SeqEntry *seq = f->GetSeqEntry(0x0054,0x0016);
-      if ( seq != NULL )
-        {
-        parsingDICOM = 1;
-        gdcm::SQItem *sqItem = seq->GetFirstSQItem();
-        while ( sqItem )
-          {
-          //---
-          //--- Radiopharmaceutical Start Time
-          tag.clear();
-          tag = sqItem->GetEntryValue(0x0018,0x1072);
-          std::cout << "Radiopharmaceutical Start Time = " << tag << std::endl;
-          //--- expect A string of characters of the format hhmmss.frac;
-          //---where hh contains hours (range "00" - "23"), mm contains minutes
-          //---(range "00" - "59"), ss contains seconds (range "00" - "59"), and frac
-          //---contains a fractional part of a second as small as 1 millionth of a
-          //---second (range "000000" - "999999"). A 24 hour clock is assumed.
-          //---Midnight can be represented by only "0000" since "2400" would
-          //---violate the hour range. The string may be padded with trailing
-          //---spaces. Leading and embedded spaces are not allowed. One
-          //---or more of the components mm, ss, or frac may be unspecified
-          //---as long as every component to the right of an unspecified
-          //---component is also unspecified. If frac is unspecified the preceding "."
-          //---may not be included. Frac shall be held to six decimal places or
-          //---less to ensure its format conforms to the ANSI
-          //---Examples -
-          //---1. "070907.0705" represents a time of 7 hours, 9 minutes and 7.0705 seconds.
-          //---2. "1010" represents a time of 10 hours, and 10 minutes.
-          //---3. "021" is an invalid value.
-          if ( tag.c_str() == NULL || *(tag.c_str()) == '\0' )
-            {
-            list.injectionTime  = "MODULE_INIT_NO_VALUE" ;
-            }
-          else
-            {
-            len = tag.length();
-            hourstr.clear();
-            minutestr.clear();
-            secondstr.clear();
-            if ( len >= 2 )
-              {
-              hourstr = tag.substr(0, 2);
-              }
-            else
-              {
-              hourstr = "00";
-              }
-            if ( len >= 4 )
-              {
-              minutestr = tag.substr(2, 2);
-              }
-            else
-              {
-              minutestr = "00";
-              }
-            if ( len >= 6 )
-              {
-              secondstr = tag.substr(4);
-              }
-            else
-              {
-              secondstr = "00";
-              }
-            tag.clear();
-            tag = hourstr.c_str();
-            tag += ":";
-            tag += minutestr.c_str();
-            tag += ":";
-            tag += secondstr.c_str();
-            list.injectionTime = tag.c_str();
-            }
-
-          //---
-          //--- Radionuclide Total Dose
-          tag.clear();
-          tag = sqItem->GetEntryValue(0x0018,0x1074);
-
-        std::cout << "Radionuclide Total Dose = " << tag << std::endl;
-          if ( tag.c_str() == NULL || *(tag.c_str()) == '\0' )
-            {
-            list.injectedDose = 0.0;
-            }
-          else
-            {
-            list.injectedDose = atof ( tag.c_str() ) ;
-            }
-
-
-          //---
-          //--- RadionuclideHalfLife
-          tag.clear();
-          tag = sqItem->GetEntryValue(0x0018,0x1075);
-          std::cout << "RadionuclideHalfLife = " << tag << std::endl;
-          //--- Expect a Decimal String
-          //--- A string of characters representing either
-          //--- a fixed point number or a floating point number.
-          //--- A fixed point number shall contain only the characters 0-9
-          //--- with an optional leading "+" or "-" and an optional "." to mark
-          //--- the decimal point. A floating point number shall be conveyed
-          //--- as defined in ANSI X3.9, with an "E" or "e" to indicate the start
-          //--- of the exponent. Decimal Strings may be padded with leading
-          //--- or trailing spaces. Embedded spaces are not allowed.
-          if ( tag.c_str() == NULL || *(tag.c_str()) == '\0' )
-            {
-            list.radionuclideHalfLife = "MODULE_INIT_NO_VALUE" ;
-            }
-          else
-            {
-            list.radionuclideHalfLife =  tag.c_str() ;
-            }
-
-          //---
-          //---Radionuclide Positron Fraction
-          tag.clear();
-          tag = sqItem->GetEntryValue(0x0018,0x1076);
-          //--- not currently using this one?
-
-          sqItem = seq->GetNextSQItem();
-          }
-
-        //--
-        //--- UNITS: something like BQML:
-        //--- CNTS, NONE, CM2, PCNT, CPS, BQML,
-        //--- MGMINML, UMOLMINML, MLMING, MLG,
-        //--- 1CM, UMOLML, PROPCNTS, PROPCPS,
-        //--- MLMINML, MLML, GML, STDDEV
+      parsingDICOM = 1;
+//      for(int i = 0; i < seq.card(); ++i)
+//        {
+//        itk::DCMTKSequence sqItem;
+//        seq.GetSequence(i,sqItem);
         //---
-        tag.clear();
-        tag = f->GetEntryValue (0x0054,0x1001);
-        std::cout << "UNITS = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
+        //--- Radiopharmaceutical Start Time
+//        sqItem.GetElementTM(0x0018,0x1072,tag);
+        seq.GetElementTM(0x0018,0x1072,tag);
+        //--- expect A string of characters of the format hhmmss.frac;
+        //---where hh contains hours (range "00" - "23"), mm contains minutes
+        //---(range "00" - "59"), ss contains seconds (range "00" - "59"), and frac
+        //---contains a fractional part of a second as small as 1 millionth of a
+        //---second (range "000000" - "999999"). A 24 hour clock is assumed.
+        //---Midnight can be represented by only "0000" since "2400" would
+        //---violate the hour range. The string may be padded with trailing
+        //---spaces. Leading and embedded spaces are not allowed. One
+        //---or more of the components mm, ss, or frac may be unspecified
+        //---as long as every component to the right of an unspecified
+        //---component is also unspecified. If frac is unspecified the preceding "."
+        //---may not be included. Frac shall be held to six decimal places or
+        //---less to ensure its format conforms to the ANSI
+        //---Examples -
+        //---1. "070907.0705" represents a time of 7 hours, 9 minutes and 7.0705 seconds.
+        //---2. "1010" represents a time of 10 hours, and 10 minutes.
+        //---3. "021" is an invalid value.
+        if ( tag.c_str() == NULL || *(tag.c_str()) == '\0' )
           {
-          //--- I think these are piled together. MBq ml... search for all.
-          std::string units = tag.c_str();
-          if ( ( units.find ("BQML") != std::string::npos) ||
-               ( units.find ("BQML") != std::string::npos) )
-            {
-            list.radioactivityUnits= "Bq";
-            list.tissueRadioactivityUnits = "Bq";
-            }
-          else if ( ( units.find ("MBq") != std::string::npos) ||
-                    ( units.find ("MBQ") != std::string::npos) )
-            {
-            list.radioactivityUnits = "MBq";
-            list.tissueRadioactivityUnits = "MBq";
-            }
-          else if ( (units.find ("kBq") != std::string::npos) ||
-                    (units.find ("kBQ") != std::string::npos) ||
-                    (units.find ("KBQ") != std::string::npos) )
-            {
-            list.radioactivityUnits = "kBq";
-            list.tissueRadioactivityUnits = "kBq";
-            }
-          else if ( (units.find ("mBq") != std::string::npos) ||
-                    (units.find ("mBQ") != std::string::npos) )
-            {
-            list.radioactivityUnits = "mBq";
-            list.tissueRadioactivityUnits = "mBq";
-            }
-          else if ( (units.find ("uBq") != std::string::npos) ||
-                    (units.find ("uBQ") != std::string::npos) )
-            {
-            list.radioactivityUnits = "uBq";
-            list.tissueRadioactivityUnits = "uBq";
-            }
-          else if ( (units.find ("Bq") != std::string::npos) ||
-                    (units.find ("BQ") != std::string::npos) )
-            {
-            list.radioactivityUnits = "Bq";
-            list.tissueRadioactivityUnits = "Bq";
-            }
-          else if ( (units.find ("MCi") != std::string::npos) ||
-                    ( units.find ("MCI") != std::string::npos) )
-            {
-            list.radioactivityUnits = "MCi";
-            list.tissueRadioactivityUnits = "MCi";
-            }
-          else if ( (units.find ("kCi") != std::string::npos) ||
-                    (units.find ("kCI") != std::string::npos)  ||
-                    (units.find ("KCI") != std::string::npos) )
-            {
-            list.radioactivityUnits = "kCi";
-            list.tissueRadioactivityUnits = "kCi";
-            }
-          else if ( (units.find ("mCi") != std::string::npos) ||
-                    (units.find ("mCI") != std::string::npos) )
-            {
-            list.radioactivityUnits = "mCi";
-            list.tissueRadioactivityUnits = "mCi";
-            }
-          else if ( (units.find ("uCi") != std::string::npos) ||
-                    (units.find ("uCI") != std::string::npos) )
-            {
-            list.radioactivityUnits = "uCi";
-            list.tissueRadioactivityUnits = "uCi";
-            }
-          else if ( (units.find ("Ci") != std::string::npos) ||
-                    (units.find ("CI") != std::string::npos) )
-            {
-            list.radioactivityUnits = "Ci";
-            list.tissueRadioactivityUnits = "Ci";
-            }
-          list.volumeUnits = "ml";
+          list.injectionTime  = "MODULE_INIT_NO_VALUE" ;
           }
         else
           {
-          //--- default values.
-          list.radioactivityUnits = "MBq";
-          list.tissueRadioactivityUnits = "MBq";
-          list.volumeUnits = "ml";
-          }
-
-
-        //---
-        //--- DecayCorrection
-        //--- Possible values are:
-        //--- NONE = no decay correction
-        //--- START= acquisition start time
-        //--- ADMIN = radiopharmaceutical administration time
-        //--- Frame Reference Time  is the time that the pixel values in the Image occurred.
-        //--- It's defined as the time offset, in msec, from the Series Reference Time.
-        //--- Series Reference Time is defined by the combination of:
-        //--- Series Date (0008,0021) and
-        //--- Series Time (0008,0031).
-        //--- We don't pull these out now, but can if we have to.
-        tag.clear();
-        tag = f->GetEntryValue (0x0054,0x1102);
-        std::cout << "DecayCorrection = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
-          {
-          //---A string of characters with leading or trailing spaces (20H) being non-significant.
-          list.decayCorrection = tag.c_str();
-          }
-        else
-          {
-          list.decayCorrection = "MODULE_INIT_NO_VALUE";
-          }
-
-        //---
-        //--- StudyDate
-//        this->ClearStudyDate();
-        tag.clear();
-        tag = f->GetEntryValue (0x0008,0x0021);
-        if ( tag.c_str() != NULL && strcmp (tag.c_str(), "" ) )
-          {
-          //--- YYYYMMDD
-          yearstr.clear();
-          daystr.clear();
-          monthstr.clear();
           len = tag.length();
-          if ( len >= 4 )
-            {
-            yearstr = tag.substr(0, 4);
-            // this->Year = atoi(yearstr.c_str() );
-            }
-          else
-            {
-            yearstr = "????";
-            // this->Year = 0;
-            }
-          if ( len >= 6 )
-            {
-            monthstr = tag.substr(4, 2);
-            // this->Month = atoi ( monthstr.c_str() );
-            }
-          else
-            {
-            monthstr = "??";
-            // this->Month = 0;
-            }
-          if ( len >= 8 )
-            {
-            daystr = tag.substr (6, 2);
-//            this->Day = atoi ( daystr.c_str() );
-            }
-          else
-            {
-            daystr = "??";
-//            this->Day = 0;
-            }
-          tag.clear();
-          tag = yearstr.c_str();
-          tag += "/";
-          tag += monthstr.c_str();
-          tag += "/";
-          tag += daystr.c_str();
-          list.studyDate = tag.c_str();
-          }
-        else
-          {
-          list.studyDate = "MODULE_INIT_NO_VALUE";
-          }
-
-        //---
-        //--- PatientName
-        tag.clear();
-        tag = f->GetEntryValue (0x0010,0x0010);
-        std::cout << "PatientName = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp (tag.c_str(), "" ) )
-          {
-          list.patientName = tag.c_str();
-          }
-        else
-          {
-          list.patientName = "MODULE_INIT_NO_VALUE";
-          }
-
-        //---
-        //--- DecayFactor
-        tag.clear();
-        tag = f->GetEntryValue (0x0054,0x1321);
-        std::cout << "DecayFactor = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
-          {
-          //--- have to parse this out. what we have is
-          //---A string of characters representing either a fixed point number or a
-          //--- floating point number. A fixed point number shall contain only the
-          //---characters 0-9 with an optional leading "+" or "-" and an optional "."
-          //---to mark the decimal point. A floating point number shall be conveyed
-          //---as defined in ANSI X3.9, with an "E" or "e" to indicate the start of the
-          //---exponent. Decimal Strings may be padded with leading or trailing spaces.
-          //---Embedded spaces are not allowed. or maybe atof does it already...
-          list.decayFactor =  tag.c_str() ;
-          }
-        else
-          {
-          list.decayFactor =  "MODULE_INIT_NO_VALUE" ;
-          }
-
-
-        //---
-        //--- FrameReferenceTime
-        tag.clear();
-        tag = f->GetEntryValue (0x0054,0x1300);
-        std::cout << "FrameReferenceTime = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
-          {
-          //--- The time that the pixel values in the image
-          //--- occurred. Frame Reference Time is the
-          //--- offset, in msec, from the Series reference
-          //--- time.
-          list.frameReferenceTime = tag.c_str();
-          }
-        else
-          {
-          list.frameReferenceTime = "MODULE_INIT_NO_VALUE";
-          }
-
-
-        //---
-        //--- SeriesTime
-        tag.clear();
-        tag = f->GetEntryValue (0x0008,0x0031);
-        std::cout << "SeriesTime = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
-          {
           hourstr.clear();
           minutestr.clear();
           secondstr.clear();
-          len = tag.length();
           if ( len >= 2 )
             {
             hourstr = tag.substr(0, 2);
@@ -1307,52 +988,325 @@ int LoadImagesAndComputeSUV( parameters & list, T )
           tag += minutestr.c_str();
           tag += ":";
           tag += secondstr.c_str();
-          list.seriesReferenceTime = tag.c_str();
+          list.injectionTime = tag.c_str();
           }
-        else
-          {
-          list.seriesReferenceTime = "MODULE_INIT_NO_VALUE";
-          }
-
 
         //---
-        //--- PatientWeight
-        tag.clear();
-        tag = f->GetEntryValue (0x0010,0x1030);
-        std::cout << "PatientWeight = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
+        //--- Radionuclide Total Dose
+//        if(sqItem.GetElementDS(0x0018,0x1074,1,&list.injectedDose,false) != EXIT_SUCCESS)
+        if(seq.GetElementDS(0x0018,0x1074,1,&list.injectedDose,false) != EXIT_SUCCESS)
           {
-          //--- Expect same format as RadionuclideHalfLife
-          list.patientWeight = atof ( tag.c_str() );
-          list.weightUnits = "kg";
+          list.injectedDose = 0.0;
           }
-        else
-          {
-          list.patientWeight = 0.0;
-          list.weightUnits = "";
-
-          }
-
 
         //---
-        //--- CalibrationFactor
-        tag.clear();
-        tag = f->GetEntryValue (0x7053,0x1009);
-        std::cout << "CalibrationFactor = " << tag << std::endl;
-        if ( tag.c_str() != NULL && strcmp(tag.c_str(), "" ) )
+        //--- RadionuclideHalfLife
+        //--- Expect a Decimal String
+        //--- A string of characters representing either
+        //--- a fixed point number or a floating point number.
+        //--- A fixed point number shall contain only the characters 0-9
+        //--- with an optional leading "+" or "-" and an optional "." to mark
+        //--- the decimal point. A floating point number shall be conveyed
+        //--- as defined in ANSI X3.9, with an "E" or "e" to indicate the start
+        //--- of the exponent. Decimal Strings may be padded with leading
+        //--- or trailing spaces. Embedded spaces are not allowed.
+//        if(sqItem.GetElementCS(0x0018,0x1075,list.radionuclideHalfLife,false) != EXIT_SUCCESS)
+        if(seq.GetElementDS(0x0018,0x1075,list.radionuclideHalfLife,false) != EXIT_SUCCESS)
           {
-          //--- converts counts to Bq/cc. If Units = BQML then CalibrationFactor =1
-          //--- I think we expect the same format as RadiopharmaceuticalStartTime
-          list.calibrationFactor =  atof(tag.c_str());
+          list.radionuclideHalfLife = "MODULE_INIT_NO_VALUE";
+          }
+        //---
+        //---Radionuclide Positron Fraction
+        //--- not currently using this one?
+        std::string radioNuclidePositronFraction;
+//        if(sqItem.GetElementCS(0x0018,0x1075,radioNuclidePositronFraction,false) != EXIT_SUCCESS)
+        if(seq.GetElementDS(0x0018,0x1075,radioNuclidePositronFraction,false) != EXIT_SUCCESS)
+          {
+          radioNuclidePositronFraction = "MODULE_INIT_NO_VALUE";
+          }
+//        }
+
+      //--
+      //--- UNITS: something like BQML:
+      //--- CNTS, NONE, CM2, PCNT, CPS, BQML,
+      //--- MGMINML, UMOLMINML, MLMING, MLG,
+      //--- 1CM, UMOLML, PROPCNTS, PROPCPS,
+      //--- MLMINML, MLML, GML, STDDEV
+      //---
+
+      if(fileReader.GetElementCS(0x0054,0x1001,tag,false) == EXIT_SUCCESS)
+        {
+        //--- I think these are piled together. MBq ml... search for all.
+        std::string units = tag.c_str();
+        if ( ( units.find ("BQML") != std::string::npos) ||
+             ( units.find ("BQML") != std::string::npos) )
+          {
+          list.radioactivityUnits= "Bq";
+          list.tissueRadioactivityUnits = "Bq";
+          }
+        else if ( ( units.find ("MBq") != std::string::npos) ||
+                  ( units.find ("MBQ") != std::string::npos) )
+          {
+          list.radioactivityUnits = "MBq";
+          list.tissueRadioactivityUnits = "MBq";
+          }
+        else if ( (units.find ("kBq") != std::string::npos) ||
+                  (units.find ("kBQ") != std::string::npos) ||
+                  (units.find ("KBQ") != std::string::npos) )
+          {
+          list.radioactivityUnits = "kBq";
+          list.tissueRadioactivityUnits = "kBq";
+          }
+        else if ( (units.find ("mBq") != std::string::npos) ||
+                  (units.find ("mBQ") != std::string::npos) )
+          {
+          list.radioactivityUnits = "mBq";
+          list.tissueRadioactivityUnits = "mBq";
+          }
+        else if ( (units.find ("uBq") != std::string::npos) ||
+                  (units.find ("uBQ") != std::string::npos) )
+          {
+          list.radioactivityUnits = "uBq";
+          list.tissueRadioactivityUnits = "uBq";
+          }
+        else if ( (units.find ("Bq") != std::string::npos) ||
+                  (units.find ("BQ") != std::string::npos) )
+          {
+          list.radioactivityUnits = "Bq";
+          list.tissueRadioactivityUnits = "Bq";
+          }
+        else if ( (units.find ("MCi") != std::string::npos) ||
+                  ( units.find ("MCI") != std::string::npos) )
+          {
+          list.radioactivityUnits = "MCi";
+          list.tissueRadioactivityUnits = "MCi";
+          }
+        else if ( (units.find ("kCi") != std::string::npos) ||
+                  (units.find ("kCI") != std::string::npos)  ||
+                  (units.find ("KCI") != std::string::npos) )
+          {
+          list.radioactivityUnits = "kCi";
+          list.tissueRadioactivityUnits = "kCi";
+          }
+        else if ( (units.find ("mCi") != std::string::npos) ||
+                  (units.find ("mCI") != std::string::npos) )
+          {
+          list.radioactivityUnits = "mCi";
+          list.tissueRadioactivityUnits = "mCi";
+          }
+        else if ( (units.find ("uCi") != std::string::npos) ||
+                  (units.find ("uCI") != std::string::npos) )
+          {
+          list.radioactivityUnits = "uCi";
+          list.tissueRadioactivityUnits = "uCi";
+          }
+        else if ( (units.find ("Ci") != std::string::npos) ||
+                  (units.find ("CI") != std::string::npos) )
+          {
+          list.radioactivityUnits = "Ci";
+          list.tissueRadioactivityUnits = "Ci";
+          }
+        list.volumeUnits = "ml";
+        }
+      else
+        {
+        //--- default values.
+        list.radioactivityUnits = "MBq";
+        list.tissueRadioactivityUnits = "MBq";
+        list.volumeUnits = "ml";
+        }
+
+
+      //---
+      //--- DecayCorrection
+      //--- Possible values are:
+      //--- NONE = no decay correction
+      //--- START= acquisition start time
+      //--- ADMIN = radiopharmaceutical administration time
+      //--- Frame Reference Time  is the time that the pixel values in the Image occurred.
+      //--- It's defined as the time offset, in msec, from the Series Reference Time.
+      //--- Series Reference Time is defined by the combination of:
+      //--- Series Date (0008,0021) and
+      //--- Series Time (0008,0031).
+      //--- We don't pull these out now, but can if we have to.
+      if(fileReader.GetElementCS(0x0054,0x1102,tag,false) == EXIT_SUCCESS)
+        {
+        //---A string of characters with leading or trailing spaces (20H) being non-significant.
+        list.decayCorrection = tag.c_str();
+        }
+      else
+        {
+        list.decayCorrection = "MODULE_INIT_NO_VALUE";
+        }
+
+      //---
+      //--- StudyDate
+      if(fileReader.GetElementDA(0x0008,0x0021,tag,false) == EXIT_SUCCESS)
+        {
+        //--- YYYYMMDD
+        yearstr.clear();
+        daystr.clear();
+        monthstr.clear();
+        len = tag.length();
+        if ( len >= 4 )
+          {
+          yearstr = tag.substr(0, 4);
+          // this->Year = atoi(yearstr.c_str() );
           }
         else
           {
-          list.calibrationFactor =  0.0 ;
+          yearstr = "????";
+          // this->Year = 0;
           }
+        if ( len >= 6 )
+          {
+          monthstr = tag.substr(4, 2);
+          // this->Month = atoi ( monthstr.c_str() );
+          }
+        else
+          {
+          monthstr = "??";
+          // this->Month = 0;
+          }
+        if ( len >= 8 )
+          {
+          daystr = tag.substr (6, 2);
+//            this->Day = atoi ( daystr.c_str() );
+          }
+        else
+          {
+          daystr = "??";
+//            this->Day = 0;
+          }
+        tag.clear();
+        tag = yearstr.c_str();
+        tag += "/";
+        tag += monthstr.c_str();
+        tag += "/";
+        tag += daystr.c_str();
+        list.studyDate = tag.c_str();
+        }
+      else
+        {
+        list.studyDate = "MODULE_INIT_NO_VALUE";
+        }
+
+      //---
+      //--- PatientName
+      if(fileReader.GetElementPN(0x0010,0x0010,tag,false) == EXIT_SUCCESS)
+        {
+        list.patientName = tag.c_str();
+        }
+      else
+        {
+        list.patientName = "MODULE_INIT_NO_VALUE";
+        }
+
+      //---
+      //--- DecayFactor
+      if(fileReader.GetElementDS(0x0054,0x1321,tag,false) == EXIT_SUCCESS)
+        {
+        //--- have to parse this out. what we have is
+        //---A string of characters representing either a fixed point number or a
+        //--- floating point number. A fixed point number shall contain only the
+        //---characters 0-9 with an optional leading "+" or "-" and an optional "."
+        //---to mark the decimal point. A floating point number shall be conveyed
+        //---as defined in ANSI X3.9, with an "E" or "e" to indicate the start of the
+        //---exponent. Decimal Strings may be padded with leading or trailing spaces.
+        //---Embedded spaces are not allowed. or maybe atof does it already...
+        list.decayFactor =  tag.c_str() ;
+        }
+      else
+        {
+        list.decayFactor =  "MODULE_INIT_NO_VALUE" ;
+        }
+
+
+      //---
+      //--- FrameReferenceTime
+      if(fileReader.GetElementDS(0x0054,0x1300,tag,false) == EXIT_SUCCESS)
+        {
+        //--- The time that the pixel values in the image
+        //--- occurred. Frame Reference Time is the
+        //--- offset, in msec, from the Series reference
+        //--- time.
+        list.frameReferenceTime = tag.c_str();
+        }
+      else
+        {
+        list.frameReferenceTime = "MODULE_INIT_NO_VALUE";
+        }
+
+
+      //---
+      //--- SeriesTime
+      if(fileReader.GetElementTM(0x0008,0x0031,tag,false) == EXIT_SUCCESS)
+        {
+        hourstr.clear();
+        minutestr.clear();
+        secondstr.clear();
+        len = tag.length();
+        if ( len >= 2 )
+          {
+          hourstr = tag.substr(0, 2);
+          }
+        else
+          {
+          hourstr = "00";
+          }
+        if ( len >= 4 )
+          {
+          minutestr = tag.substr(2, 2);
+          }
+        else
+          {
+          minutestr = "00";
+          }
+        if ( len >= 6 )
+          {
+          secondstr = tag.substr(4);
+          }
+        else
+          {
+          secondstr = "00";
+          }
+        tag.clear();
+        tag = hourstr.c_str();
+        tag += ":";
+        tag += minutestr.c_str();
+        tag += ":";
+        tag += secondstr.c_str();
+        list.seriesReferenceTime = tag.c_str();
+        }
+      else
+        {
+        list.seriesReferenceTime = "MODULE_INIT_NO_VALUE";
+        }
+
+
+      //---
+      //--- PatientWeight
+      if(fileReader.GetElementDS(0x0010,0x1030,1,&list.patientWeight,false) == EXIT_SUCCESS)
+        {
+        //--- Expect same format as RadionuclideHalfLife
+        list.weightUnits = "kg";
+        }
+      else
+        {
+        list.patientWeight = 0.0;
+        list.weightUnits = "";
+
+        }
+
+
+      //---
+      //--- CalibrationFactor
+      if(fileReader.GetElementDS(0x7053,0x1009,1,
+                                 &list.calibrationFactor,false) != EXIT_SUCCESS)
+        {
+        list.calibrationFactor =  0.0 ;
         }
       }
-    delete f;
-
 
     // check.... did we get all params we need for computation?
     if ( (parsingDICOM) &&
@@ -1412,11 +1366,21 @@ int LoadImagesAndComputeSUV( parameters & list, T )
     return EXIT_FAILURE;
     }
   else
-    { //All values okay; perform calculation
+  { //All values okay; perform calculation
     double weightByDose = weight / dose;
     typename ReaderType::Pointer reader = ReaderType::New();
     reader->SetFileName(list.PETVolumeName.c_str());
-    reader->Update();
+    try {
+      reader->Update();
+    }
+    catch (...)
+    {
+      std::cout << "Warning: Unable to automatically detect file type for reader.  Trying .nrrd...\n";
+      itk::NrrdImageIO::Pointer nrrdIO = itk::NrrdImageIO::New();
+      reader->SetImageIO(nrrdIO);
+      reader->Update();
+      std::cout << "Successfully read " << list.PETVolumeName.c_str() << std::endl;
+    }
 
     typedef itk::ImageRegionIterator<InputImageType> IteratorType;
     IteratorType it(reader->GetOutput(), reader->GetOutput()->GetLargestPossibleRegion());
@@ -1432,11 +1396,21 @@ int LoadImagesAndComputeSUV( parameters & list, T )
     typename WriterType::Pointer writer = WriterType::New();
     writer->SetFileName(list.SUVVolumeName.c_str());
     writer->SetInput(reader->GetOutput());
-    writer->Update();
+    try {
+      writer->Update();
     }
+    catch (...)
+    {
+      std::cerr << "Warning: Unable to automatically detect file type for writer.  Trying .nrrd...\n";
+      itk::NrrdImageIO::Pointer nrrdIO = itk::NrrdImageIO::New();
+      writer->SetImageIO(nrrdIO);
+      writer->Update();
+      std::cout << "Successfully wrote " << list.SUVVolumeName.c_str() << std::endl;
+    }
+  }
 
 
-  reader1->Delete();
+  //reader1->Delete();
   return EXIT_SUCCESS;
 
 }
@@ -1452,7 +1426,7 @@ int LoadImagesAndComputeSUV( parameters & list, T )
 // ...
 int main( int argc, char * argv[] )
 {
-
+  std::cout << "Main for test version of PETSUVImageMaker\n";
   PARSE_ARGS;
   parameters list;
 
