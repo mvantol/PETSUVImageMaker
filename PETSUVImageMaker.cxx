@@ -1426,8 +1426,8 @@ int LoadImagesAndComputeSUV( parameters & list, T )
 // ...
 int main( int argc, char * argv[] )
 {
-  std::cout << "Main for test version of PETSUVImageMaker\n";
   PARSE_ARGS;
+  std::cout << "Main for test version of PETSUVImageMaker\n";
   parameters list;
 
   // ...
